@@ -1,14 +1,17 @@
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 import pandas as pd
-import openai
 from openai import OpenAI
+from fastapi import HTTPException
 
 class AIService:
     """Servicio para interactuar con OpenAI API"""
-
+    
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY no está configurada")
+        self.client = OpenAI(api_key=api_key)
 
     @staticmethod
     def generate_dataframe_context(df: pd.DataFrame, summary: Dict[str, Any]) -> str:
@@ -31,17 +34,19 @@ class AIService:
         if summary.get("numeric_columns"):
             context_lines.append("\nEstadísticas numéricas:")
             for col in summary["numeric_columns"]:
-                stats = summary["numeric_stats"]
-                context_lines.append(
-                    f"- {col}: promedio={stats['mean'][col]:.2f} (min={stats['min'][col]}, max={stats['max'][col]})"
-                )
+                if col in summary.get("numeric_stats", {}).get("mean", {}):
+                    stats = summary["numeric_stats"]
+                    context_lines.append(
+                        f"- {col}: promedio={stats['mean'][col]:.2f} (min={stats['min'][col]}, max={stats['max'][col]})"
+                    )
 
         # Valores categóricos
         if summary.get("categorical_columns"):
             context_lines.append("\nValores únicos en columnas categóricas:")
             for col in summary["categorical_columns"][:3]:  # Limitar a 3 columnas
                 unique_vals = df[col].dropna().unique()[:5]
-                context_lines.append(f"- {col}: {', '.join(map(str, unique_vals))}")
+                if len(unique_vals) > 0:
+                    context_lines.append(f"- {col}: {', '.join(map(str, unique_vals))}")
 
         # Ejemplos de datos
         if not df.empty:
@@ -52,13 +57,39 @@ class AIService:
 
         return "\n".join(context_lines)
 
-    def get_answer(self, df: pd.DataFrame, summary: Dict[str, Any], question: str) -> str:
-        """Obtiene respuesta de OpenAI usando el contexto de los datos"""
-        context = self.generate_dataframe_context(df, summary)
-
+    @staticmethod
+    def process_file_data(file_data: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """Convierte los datos del archivo en DataFrame y summary"""
         try:
+            df = pd.DataFrame(file_data.get("data", []))
+            
+            summary = {
+                "rows": len(df),
+                "columns": len(df.columns),
+                "column_names": list(df.columns),
+                "numeric_columns": df.select_dtypes(include=['number']).columns.tolist(),
+                "categorical_columns": df.select_dtypes(include=['object', 'category']).columns.tolist(),
+                "numeric_stats": {
+                    "mean": df.mean(numeric_only=True).to_dict(),
+                    "min": df.min(numeric_only=True).to_dict(),
+                    "max": df.max(numeric_only=True).to_dict()
+                } if not df.empty else {}
+            }
+            return df, summary
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error procesando datos: {str(e)}")
+
+    def get_answer(self, file_data: Dict[str, Any], question: str) -> str:
+        """Versión adaptada para recibir datos del frontend"""
+        if not question:
+            raise ValueError("Se requiere una pregunta")
+            
+        try:
+            df, summary = self.process_file_data(file_data)
+            context = self.generate_dataframe_context(df, summary)
+            
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",  # o "gpt-4-turbo"
+                model="gpt-3.5-turbo",
                 messages=[
                     {
                         "role": "system",
@@ -69,10 +100,9 @@ class AIService:
                         "content": f"Contexto:\n{context}\n\nPregunta: {question}"
                     }
                 ],
-                temperature=0.3,  # Para respuestas más deterministas
+                temperature=0.3,
                 max_tokens=500
             )
             return response.choices[0].message.content.strip()
-
         except Exception as e:
-            return f"Error al consultar OpenAI: {str(e)}"
+            raise HTTPException(status_code=500, detail=f"Error en OpenAI: {str(e)}")

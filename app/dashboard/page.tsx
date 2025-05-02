@@ -10,8 +10,6 @@ import { ModeToggle } from "@/components/mode-toggle"
 import { motion } from "framer-motion"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-// Importa el componente DebugInfo
-import { DebugInfo } from "@/components/debug-info"
 
 export default function DashboardPage() {
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null)
@@ -103,8 +101,6 @@ export default function DashboardPage() {
           </div>
         </div>
       </header>
-
-      <DebugInfo />
 
       <main className="container py-8 bg-gradient-to-b from-background to-muted/30">
         <div className="flex flex-col gap-8">
